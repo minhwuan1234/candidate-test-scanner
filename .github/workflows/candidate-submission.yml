@@ -22,9 +22,9 @@ jobs:
         shell: bash
         env:
           SUBMISSION_ID: ${{ github.event.client_payload.submission_id }}
-          CANDIDATE_NAME: ${{ github.event.client_payload.candidate_name }}
-          CANDIDATE_EMAIL: ${{ github.event.client_payload.candidate_email }}
-          POSITION: ${{ github.event.client_payload.position }}
+          CANDIDATE_NAME: ${{ github.event.client_payload.candidate.name }}
+          CANDIDATE_EMAIL: ${{ github.event.client_payload.candidate.email }}
+          POSITION: ${{ github.event.client_payload.candidate.position }}
         run: |
           set -euo pipefail
 
@@ -34,6 +34,8 @@ jobs:
 
           echo "Candidate submission event accepted"
           echo "Submission ID: $SUBMISSION_ID"
+          echo "Candidate: $CANDIDATE_NAME"
+          echo "Email: $CANDIDATE_EMAIL"
           echo "Position: ${POSITION:-Not provided}"
 
       - name: Store payload for the next Lark step
@@ -42,7 +44,13 @@ jobs:
           EVENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
         run: |
           set -euo pipefail
+
           printf '%s' "$EVENT_PAYLOAD" > candidate-payload.json
+
+          test -s candidate-payload.json
+
+          echo "Payload stored successfully"
+          cat candidate-payload.json
 
       - name: Upload payload artifact
         uses: actions/upload-artifact@v4
@@ -52,9 +60,10 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-      # The next step will call Lark Open API using:
+      # Next step:
+      # Send a direct message through Lark Open API using:
       # - LARK_APP_ID
       # - LARK_APP_SECRET
-      # - the recipient's open_id
+      # - LARK_RECIPIENT_OPEN_ID
       #
       # No Lark incoming webhook will be used.
