@@ -1,0 +1,60 @@
+name: Candidate submission received
+
+on:
+  repository_dispatch:
+    types:
+      - candidate_submission_created
+
+permissions:
+  contents: read
+
+concurrency:
+  group: candidate-submission-${{ github.event.client_payload.submission_id }}
+  cancel-in-progress: false
+
+jobs:
+  receive-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Validate dispatch payload
+        shell: bash
+        env:
+          SUBMISSION_ID: ${{ github.event.client_payload.submission_id }}
+          CANDIDATE_NAME: ${{ github.event.client_payload.candidate_name }}
+          CANDIDATE_EMAIL: ${{ github.event.client_payload.candidate_email }}
+          POSITION: ${{ github.event.client_payload.position }}
+        run: |
+          set -euo pipefail
+
+          test -n "$SUBMISSION_ID"
+          test -n "$CANDIDATE_NAME"
+          test -n "$CANDIDATE_EMAIL"
+
+          echo "Candidate submission event accepted"
+          echo "Submission ID: $SUBMISSION_ID"
+          echo "Position: ${POSITION:-Not provided}"
+
+      - name: Store payload for the next Lark step
+        shell: bash
+        env:
+          EVENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$EVENT_PAYLOAD" > candidate-payload.json
+
+      - name: Upload payload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-${{ github.event.client_payload.submission_id }}
+          path: candidate-payload.json
+          retention-days: 7
+          if-no-files-found: error
+
+      # The next step will call Lark Open API using:
+      # - LARK_APP_ID
+      # - LARK_APP_SECRET
+      # - the recipient's open_id
+      #
+      # No Lark incoming webhook will be used.
