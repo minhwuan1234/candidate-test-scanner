@@ -48,6 +48,8 @@ jobs:
           printf '%s' "$EVENT_PAYLOAD" > candidate-payload.json
           test -s candidate-payload.json
 
+          jq empty candidate-payload.json
+
           echo "Candidate payload stored"
 
       - name: Upload payload artifact
@@ -80,25 +82,63 @@ jobs:
               }'
           )"
 
-          AUTH_RESPONSE="$(
-            curl --silent --show-error --fail-with-body \
+          AUTH_RESPONSE_FILE="$(mktemp)"
+
+          AUTH_HTTP_STATUS="$(
+            curl \
+              --silent \
+              --show-error \
+              --output "$AUTH_RESPONSE_FILE" \
+              --write-out "%{http_code}" \
               --request POST \
               --url "https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal" \
               --header "Content-Type: application/json; charset=utf-8" \
               --data "$AUTH_PAYLOAD"
           )"
 
-          AUTH_CODE="$(echo "$AUTH_RESPONSE" | jq -r '.code // -1')"
-          AUTH_MESSAGE="$(echo "$AUTH_RESPONSE" | jq -r '.msg // "Unknown Lark auth error"')"
-          TENANT_ACCESS_TOKEN="$(echo "$AUTH_RESPONSE" | jq -r '.tenant_access_token // empty')"
+          AUTH_RESPONSE="$(cat "$AUTH_RESPONSE_FILE")"
+
+          rm -f "$AUTH_RESPONSE_FILE"
+
+          if ! echo "$AUTH_RESPONSE" | jq empty >/dev/null 2>&1; then
+            echo "::error::Lark authentication returned invalid JSON"
+            echo "HTTP status: $AUTH_HTTP_STATUS"
+            echo "$AUTH_RESPONSE"
+            exit 1
+          fi
+
+          AUTH_CODE="$(
+            echo "$AUTH_RESPONSE" |
+              jq -r '.code // -1'
+          )"
+
+          AUTH_MESSAGE="$(
+            echo "$AUTH_RESPONSE" |
+              jq -r '.msg // "Unknown Lark auth error"'
+          )"
+
+          TENANT_ACCESS_TOKEN="$(
+            echo "$AUTH_RESPONSE" |
+              jq -r '.tenant_access_token // empty'
+          )"
+
+          if [ "$AUTH_HTTP_STATUS" -lt 200 ] || [ "$AUTH_HTTP_STATUS" -ge 300 ]; then
+            echo "::error::Lark authentication HTTP error: status=$AUTH_HTTP_STATUS"
+            echo "$AUTH_RESPONSE" | jq .
+            exit 1
+          fi
 
           if [ "$AUTH_CODE" != "0" ] || [ -z "$TENANT_ACCESS_TOKEN" ]; then
             echo "::error::Lark authentication failed: code=$AUTH_CODE, message=$AUTH_MESSAGE"
+            echo "$AUTH_RESPONSE" | jq .
             exit 1
           fi
 
           echo "::add-mask::$TENANT_ACCESS_TOKEN"
-          echo "tenant_access_token=$TENANT_ACCESS_TOKEN" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "tenant_access_token=$TENANT_ACCESS_TOKEN"
+          } >> "$GITHUB_OUTPUT"
 
           echo "Lark authentication successful"
 
@@ -107,16 +147,45 @@ jobs:
         run: |
           set -euo pipefail
 
-          SUBMISSION_ID="$(jq -r '.submission_id // ""' candidate-payload.json)"
-          CANDIDATE_NAME="$(jq -r '.candidate.name // "Not provided"' candidate-payload.json)"
-          CANDIDATE_EMAIL="$(jq -r '.candidate.email // "Not provided"' candidate-payload.json)"
-          POSITION="$(jq -r '.candidate.position // "Not provided"' candidate-payload.json)"
-          DURATION="$(jq -r '.candidate.duration // "Not provided"' candidate-payload.json)"
-          LINKEDIN_URL="$(jq -r '.candidate.linkedin_url // ""' candidate-payload.json)"
-          LIST_URL="$(jq -r '.candidate.list_url // ""' candidate-payload.json)"
-          SOURCE_URL="$(jq -r '.candidate.source_url // ""' candidate-payload.json)"
-          NOTES="$(jq -r '.candidate.notes // ""' candidate-payload.json)"
-          SUBMITTED_AT="$(jq -r '.candidate.submitted_at // "Not provided"' candidate-payload.json)"
+          SUBMISSION_ID="$(
+            jq -r '.submission_id // ""' candidate-payload.json
+          )"
+
+          CANDIDATE_NAME="$(
+            jq -r '.candidate.name // "Not provided"' candidate-payload.json
+          )"
+
+          CANDIDATE_EMAIL="$(
+            jq -r '.candidate.email // "Not provided"' candidate-payload.json
+          )"
+
+          POSITION="$(
+            jq -r '.candidate.position // "Not provided"' candidate-payload.json
+          )"
+
+          DURATION="$(
+            jq -r '.candidate.duration // "Not provided"' candidate-payload.json
+          )"
+
+          LINKEDIN_URL="$(
+            jq -r '.candidate.linkedin_url // ""' candidate-payload.json
+          )"
+
+          LIST_URL="$(
+            jq -r '.candidate.list_url // ""' candidate-payload.json
+          )"
+
+          SOURCE_URL="$(
+            jq -r '.candidate.source_url // ""' candidate-payload.json
+          )"
+
+          NOTES="$(
+            jq -r '.candidate.notes // ""' candidate-payload.json
+          )"
+
+          SUBMITTED_AT="$(
+            jq -r '.candidate.submitted_at // "Not provided"' candidate-payload.json
+          )"
 
           DETAILS_MARKDOWN="$(
             printf '**Candidate:** %s\n**Email:** %s\n**Position:** %s\n**Duration:** %s\n**Submitted at:** %s\n**Submission ID:** %s' \
@@ -140,32 +209,40 @@ jobs:
                 wide_screen_mode: true,
                 enable_forward: true
               },
+
               header: {
                 template: "blue",
+
                 title: {
                   tag: "plain_text",
                   content: "New candidate submission"
                 }
               },
+
               elements: (
                 [
                   {
                     tag: "div",
+
                     text: {
                       tag: "lark_md",
                       content: $details
                     }
                   },
+
                   {
                     tag: "hr"
                   }
                 ]
+
                 +
+
                 (
                   if $notes != "" then
                     [
                       {
                         tag: "div",
+
                         text: {
                           tag: "lark_md",
                           content: ("**Notes**\n" + $notes)
@@ -176,23 +253,30 @@ jobs:
                     []
                   end
                 )
+
                 +
+
                 (
                   [
                     {
                       tag: "action",
+
                       actions: (
                         []
+
                         +
+
                         (
                           if $list_url != "" then
                             [
                               {
                                 tag: "button",
+
                                 text: {
                                   tag: "plain_text",
                                   content: "Open submission"
                                 },
+
                                 type: "primary",
                                 url: $list_url
                               }
@@ -201,16 +285,20 @@ jobs:
                             []
                           end
                         )
+
                         +
+
                         (
                           if $linkedin_url != "" then
                             [
                               {
                                 tag: "button",
+
                                 text: {
                                   tag: "plain_text",
                                   content: "LinkedIn"
                                 },
+
                                 url: $linkedin_url
                               }
                             ]
@@ -218,16 +306,20 @@ jobs:
                             []
                           end
                         )
+
                         +
+
                         (
                           if $source_url != "" then
                             [
                               {
                                 tag: "button",
+
                                 text: {
                                   tag: "plain_text",
                                   content: "Source page"
                                 },
+
                                 url: $source_url
                               }
                             ]
@@ -259,42 +351,168 @@ jobs:
           test -n "$LARK_RECIPIENT_OPEN_ID"
           test -s lark-card.json
 
-          CARD_CONTENT="$(jq -c '.' lark-card.json)"
-
-          MESSAGE_PAYLOAD="$(
-            jq -n \
-              --arg receive_id "$LARK_RECIPIENT_OPEN_ID" \
-              --arg content "$CARD_CONTENT" \
-              '{
-                receive_id: $receive_id,
-                msg_type: "interactive",
-                content: $content
-              }'
+          CARD_CONTENT="$(
+            jq -c '.' lark-card.json
           )"
 
-          LARK_RESPONSE="$(
-            curl --silent --show-error --fail-with-body \
-              --request POST \
-              --url "https://open.larksuite.com/open-apis/im/v1/messages?receive_id_type=open_id" \
-              --header "Authorization: Bearer $TENANT_ACCESS_TOKEN" \
-              --header "Content-Type: application/json; charset=utf-8" \
-              --data "$MESSAGE_PAYLOAD"
-          )"
+          # Secret hỗ trợ hai cấu trúc:
+          #
+          # Một người:
+          # ou_xxxxxxxxx
+          #
+          # Nhiều người:
+          # ["ou_xxxxxxxxx","ou_yyyyyyyyy"]
 
-          LARK_CODE="$(echo "$LARK_RESPONSE" | jq -r '.code // -1')"
-          LARK_MESSAGE="$(echo "$LARK_RESPONSE" | jq -r '.msg // "Unknown Lark message error"')"
-          MESSAGE_ID="$(echo "$LARK_RESPONSE" | jq -r '.data.message_id // empty')"
+          if echo "$LARK_RECIPIENT_OPEN_ID" |
+            jq -e 'type == "array"' >/dev/null 2>&1
+          then
+            RECIPIENTS_JSON="$LARK_RECIPIENT_OPEN_ID"
+          else
+            RECIPIENTS_JSON="$(
+              jq -cn \
+                --arg open_id "$LARK_RECIPIENT_OPEN_ID" \
+                '[$open_id]'
+            )"
+          fi
 
-          if [ "$LARK_CODE" != "0" ]; then
-            echo "::error::Failed to send Lark card: code=$LARK_CODE, message=$LARK_MESSAGE"
-            echo "$LARK_RESPONSE" | jq .
+          if ! echo "$RECIPIENTS_JSON" |
+            jq -e '
+              type == "array"
+              and length > 0
+              and all(
+                .[];
+                type == "string"
+                and length > 0
+                and startswith("ou_")
+              )
+            ' >/dev/null
+          then
+            echo "::error::LARK_RECIPIENT_OPEN_ID không đúng cấu trúc"
+            echo 'Một người: ou_xxxxxxxxx'
+            echo 'Nhiều người: ["ou_xxxxxxxxx","ou_yyyyyyyyy"]'
             exit 1
           fi
 
-          echo "Lark card sent successfully"
-          echo "Message ID: $MESSAGE_ID"
+          TOTAL_RECIPIENTS="$(
+            echo "$RECIPIENTS_JSON" |
+              jq 'length'
+          )"
+
+          echo "Total Lark recipients: $TOTAL_RECIPIENTS"
+
+          SENT_COUNT=0
+          FAILED_COUNT=0
+
+          while IFS= read -r RECIPIENT_OPEN_ID
+          do
+            if [ -z "$RECIPIENT_OPEN_ID" ]; then
+              continue
+            fi
+
+            SENT_COUNT=$((SENT_COUNT + 1))
+
+            echo ""
+            echo "Sending Lark card: $SENT_COUNT/$TOTAL_RECIPIENTS"
+            echo "Recipient Open ID: $RECIPIENT_OPEN_ID"
+
+            MESSAGE_PAYLOAD="$(
+              jq -n \
+                --arg receive_id "$RECIPIENT_OPEN_ID" \
+                --arg content "$CARD_CONTENT" \
+                '{
+                  receive_id: $receive_id,
+                  msg_type: "interactive",
+                  content: $content
+                }'
+            )"
+
+            RESPONSE_FILE="$(mktemp)"
+
+            HTTP_STATUS="$(
+              curl \
+                --silent \
+                --show-error \
+                --output "$RESPONSE_FILE" \
+                --write-out "%{http_code}" \
+                --request POST \
+                --url "https://open.larksuite.com/open-apis/im/v1/messages?receive_id_type=open_id" \
+                --header "Authorization: Bearer $TENANT_ACCESS_TOKEN" \
+                --header "Content-Type: application/json; charset=utf-8" \
+                --data "$MESSAGE_PAYLOAD"
+            )"
+
+            LARK_RESPONSE="$(
+              cat "$RESPONSE_FILE"
+            )"
+
+            rm -f "$RESPONSE_FILE"
+
+            if ! echo "$LARK_RESPONSE" |
+              jq empty >/dev/null 2>&1
+            then
+              echo "::error::Lark returned invalid JSON for recipient $RECIPIENT_OPEN_ID"
+              echo "HTTP status: $HTTP_STATUS"
+              echo "$LARK_RESPONSE"
+
+              FAILED_COUNT=$((FAILED_COUNT + 1))
+              continue
+            fi
+
+            LARK_CODE="$(
+              echo "$LARK_RESPONSE" |
+                jq -r '.code // -1'
+            )"
+
+            LARK_MESSAGE="$(
+              echo "$LARK_RESPONSE" |
+                jq -r '.msg // "Unknown Lark message error"'
+            )"
+
+            MESSAGE_ID="$(
+              echo "$LARK_RESPONSE" |
+                jq -r '.data.message_id // empty'
+            )"
+
+            if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+              echo "::error::Lark HTTP error for $RECIPIENT_OPEN_ID: status=$HTTP_STATUS"
+              echo "$LARK_RESPONSE" | jq .
+
+              FAILED_COUNT=$((FAILED_COUNT + 1))
+              continue
+            fi
+
+            if [ "$LARK_CODE" != "0" ]; then
+              echo "::error::Failed to send Lark card to $RECIPIENT_OPEN_ID: code=$LARK_CODE, message=$LARK_MESSAGE"
+              echo "$LARK_RESPONSE" | jq .
+
+              FAILED_COUNT=$((FAILED_COUNT + 1))
+              continue
+            fi
+
+            echo "Lark card sent successfully"
+            echo "Recipient: $RECIPIENT_OPEN_ID"
+            echo "Message ID: $MESSAGE_ID"
+
+          done < <(
+            echo "$RECIPIENTS_JSON" |
+              jq -r '.[]'
+          )
+
+          SUCCESS_COUNT=$((TOTAL_RECIPIENTS - FAILED_COUNT))
+
+          echo ""
+          echo "Lark delivery completed"
+          echo "Successful: $SUCCESS_COUNT"
+          echo "Failed: $FAILED_COUNT"
+          echo "Total: $TOTAL_RECIPIENTS"
+
+          if [ "$FAILED_COUNT" -gt 0 ]; then
+            echo "::error::$FAILED_COUNT Lark message(s) failed"
+            exit 1
+          fi
 
       - name: Upload Lark card artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: lark-card-${{ github.event.client_payload.submission_id }}
