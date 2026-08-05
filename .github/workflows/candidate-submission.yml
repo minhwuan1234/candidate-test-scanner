@@ -38,7 +38,7 @@ jobs:
           echo "Email: $CANDIDATE_EMAIL"
           echo "Position: ${POSITION:-Not provided}"
 
-      - name: Store payload for the next Lark step
+      - name: Store payload
         shell: bash
         env:
           EVENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
@@ -46,11 +46,9 @@ jobs:
           set -euo pipefail
 
           printf '%s' "$EVENT_PAYLOAD" > candidate-payload.json
-
           test -s candidate-payload.json
 
-          echo "Payload stored successfully"
-          cat candidate-payload.json
+          echo "Candidate payload stored"
 
       - name: Upload payload artifact
         uses: actions/upload-artifact@v4
@@ -60,10 +58,246 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-      # Next step:
-      # Send a direct message through Lark Open API using:
-      # - LARK_APP_ID
-      # - LARK_APP_SECRET
-      # - LARK_RECIPIENT_OPEN_ID
-      #
-      # No Lark incoming webhook will be used.
+      - name: Get Lark tenant access token
+        id: lark-auth
+        shell: bash
+        env:
+          LARK_APP_ID: ${{ secrets.LARK_APP_ID }}
+          LARK_APP_SECRET: ${{ secrets.LARK_APP_SECRET }}
+        run: |
+          set -euo pipefail
+
+          test -n "$LARK_APP_ID"
+          test -n "$LARK_APP_SECRET"
+
+          AUTH_PAYLOAD="$(
+            jq -n \
+              --arg app_id "$LARK_APP_ID" \
+              --arg app_secret "$LARK_APP_SECRET" \
+              '{
+                app_id: $app_id,
+                app_secret: $app_secret
+              }'
+          )"
+
+          AUTH_RESPONSE="$(
+            curl --silent --show-error --fail-with-body \
+              --request POST \
+              --url "https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal" \
+              --header "Content-Type: application/json; charset=utf-8" \
+              --data "$AUTH_PAYLOAD"
+          )"
+
+          AUTH_CODE="$(echo "$AUTH_RESPONSE" | jq -r '.code // -1')"
+          AUTH_MESSAGE="$(echo "$AUTH_RESPONSE" | jq -r '.msg // "Unknown Lark auth error"')"
+          TENANT_ACCESS_TOKEN="$(echo "$AUTH_RESPONSE" | jq -r '.tenant_access_token // empty')"
+
+          if [ "$AUTH_CODE" != "0" ] || [ -z "$TENANT_ACCESS_TOKEN" ]; then
+            echo "::error::Lark authentication failed: code=$AUTH_CODE, message=$AUTH_MESSAGE"
+            exit 1
+          fi
+
+          echo "::add-mask::$TENANT_ACCESS_TOKEN"
+          echo "tenant_access_token=$TENANT_ACCESS_TOKEN" >> "$GITHUB_OUTPUT"
+
+          echo "Lark authentication successful"
+
+      - name: Build Lark candidate card
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SUBMISSION_ID="$(jq -r '.submission_id // ""' candidate-payload.json)"
+          CANDIDATE_NAME="$(jq -r '.candidate.name // "Not provided"' candidate-payload.json)"
+          CANDIDATE_EMAIL="$(jq -r '.candidate.email // "Not provided"' candidate-payload.json)"
+          POSITION="$(jq -r '.candidate.position // "Not provided"' candidate-payload.json)"
+          DURATION="$(jq -r '.candidate.duration // "Not provided"' candidate-payload.json)"
+          LINKEDIN_URL="$(jq -r '.candidate.linkedin_url // ""' candidate-payload.json)"
+          LIST_URL="$(jq -r '.candidate.list_url // ""' candidate-payload.json)"
+          SOURCE_URL="$(jq -r '.candidate.source_url // ""' candidate-payload.json)"
+          NOTES="$(jq -r '.candidate.notes // ""' candidate-payload.json)"
+          SUBMITTED_AT="$(jq -r '.candidate.submitted_at // "Not provided"' candidate-payload.json)"
+
+          DETAILS_MARKDOWN="$(
+            printf '**Candidate:** %s\n**Email:** %s\n**Position:** %s\n**Duration:** %s\n**Submitted at:** %s\n**Submission ID:** %s' \
+              "$CANDIDATE_NAME" \
+              "$CANDIDATE_EMAIL" \
+              "$POSITION" \
+              "$DURATION" \
+              "$SUBMITTED_AT" \
+              "$SUBMISSION_ID"
+          )"
+
+          jq -n \
+            --arg details "$DETAILS_MARKDOWN" \
+            --arg linkedin_url "$LINKEDIN_URL" \
+            --arg list_url "$LIST_URL" \
+            --arg source_url "$SOURCE_URL" \
+            --arg notes "$NOTES" \
+            '
+            {
+              config: {
+                wide_screen_mode: true,
+                enable_forward: true
+              },
+              header: {
+                template: "blue",
+                title: {
+                  tag: "plain_text",
+                  content: "New candidate submission"
+                }
+              },
+              elements: (
+                [
+                  {
+                    tag: "div",
+                    text: {
+                      tag: "lark_md",
+                      content: $details
+                    }
+                  },
+                  {
+                    tag: "hr"
+                  }
+                ]
+                +
+                (
+                  if $notes != "" then
+                    [
+                      {
+                        tag: "div",
+                        text: {
+                          tag: "lark_md",
+                          content: ("**Notes**\n" + $notes)
+                        }
+                      }
+                    ]
+                  else
+                    []
+                  end
+                )
+                +
+                (
+                  [
+                    {
+                      tag: "action",
+                      actions: (
+                        []
+                        +
+                        (
+                          if $list_url != "" then
+                            [
+                              {
+                                tag: "button",
+                                text: {
+                                  tag: "plain_text",
+                                  content: "Open submission"
+                                },
+                                type: "primary",
+                                url: $list_url
+                              }
+                            ]
+                          else
+                            []
+                          end
+                        )
+                        +
+                        (
+                          if $linkedin_url != "" then
+                            [
+                              {
+                                tag: "button",
+                                text: {
+                                  tag: "plain_text",
+                                  content: "LinkedIn"
+                                },
+                                url: $linkedin_url
+                              }
+                            ]
+                          else
+                            []
+                          end
+                        )
+                        +
+                        (
+                          if $source_url != "" then
+                            [
+                              {
+                                tag: "button",
+                                text: {
+                                  tag: "plain_text",
+                                  content: "Source page"
+                                },
+                                url: $source_url
+                              }
+                            ]
+                          else
+                            []
+                          end
+                        )
+                      )
+                    }
+                  ]
+                )
+              )
+            }
+            ' > lark-card.json
+
+          jq empty lark-card.json
+
+          echo "Lark card generated"
+
+      - name: Send direct Lark card
+        shell: bash
+        env:
+          TENANT_ACCESS_TOKEN: ${{ steps.lark-auth.outputs.tenant_access_token }}
+          LARK_RECIPIENT_OPEN_ID: ${{ secrets.LARK_RECIPIENT_OPEN_ID }}
+        run: |
+          set -euo pipefail
+
+          test -n "$TENANT_ACCESS_TOKEN"
+          test -n "$LARK_RECIPIENT_OPEN_ID"
+          test -s lark-card.json
+
+          CARD_CONTENT="$(jq -c '.' lark-card.json)"
+
+          MESSAGE_PAYLOAD="$(
+            jq -n \
+              --arg receive_id "$LARK_RECIPIENT_OPEN_ID" \
+              --arg content "$CARD_CONTENT" \
+              '{
+                receive_id: $receive_id,
+                msg_type: "interactive",
+                content: $content
+              }'
+          )"
+
+          LARK_RESPONSE="$(
+            curl --silent --show-error --fail-with-body \
+              --request POST \
+              --url "https://open.larksuite.com/open-apis/im/v1/messages?receive_id_type=open_id" \
+              --header "Authorization: Bearer $TENANT_ACCESS_TOKEN" \
+              --header "Content-Type: application/json; charset=utf-8" \
+              --data "$MESSAGE_PAYLOAD"
+          )"
+
+          LARK_CODE="$(echo "$LARK_RESPONSE" | jq -r '.code // -1')"
+          LARK_MESSAGE="$(echo "$LARK_RESPONSE" | jq -r '.msg // "Unknown Lark message error"')"
+          MESSAGE_ID="$(echo "$LARK_RESPONSE" | jq -r '.data.message_id // empty')"
+
+          if [ "$LARK_CODE" != "0" ]; then
+            echo "::error::Failed to send Lark card: code=$LARK_CODE, message=$LARK_MESSAGE"
+            echo "$LARK_RESPONSE" | jq .
+            exit 1
+          fi
+
+          echo "Lark card sent successfully"
+          echo "Message ID: $MESSAGE_ID"
+
+      - name: Upload Lark card artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lark-card-${{ github.event.client_payload.submission_id }}
+          path: lark-card.json
+          retention-days: 7
+          if-no-files-found: error
