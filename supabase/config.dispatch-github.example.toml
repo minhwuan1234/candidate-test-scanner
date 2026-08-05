@@ -1,0 +1,5 @@
+# Add this block to the existing supabase/config.toml file.
+# Do not replace the entire generated config.toml with only this snippet.
+
+[functions.dispatch-github]
+verify_jwt = false
