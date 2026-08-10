@@ -18,10 +18,6 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      # ============================================================
-      # 1. VALIDATE PAYLOAD FROM SUPABASE
-      # ============================================================
-
       - name: Validate dispatch payload
         shell: bash
         env:
@@ -53,11 +49,6 @@ jobs:
           echo "Answer testing URL provided"
           echo "Submitted at: ${SUBMITTED_AT:-Not provided}"
 
-
-      # ============================================================
-      # 2. STORE RAW PAYLOAD
-      # ============================================================
-
       - name: Store candidate payload
         shell: bash
         env:
@@ -72,14 +63,6 @@ jobs:
 
           echo "Candidate payload stored successfully"
 
-          echo "Payload received:"
-          jq . candidate-payload.json
-
-
-      # ============================================================
-      # 3. UPLOAD RAW PAYLOAD ARTIFACT
-      # ============================================================
-
       - name: Upload candidate payload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -87,11 +70,6 @@ jobs:
           path: candidate-payload.json
           retention-days: 7
           if-no-files-found: error
-
-
-      # ============================================================
-      # 4. GET LARK TENANT ACCESS TOKEN
-      # ============================================================
 
       - name: Get Lark tenant access token
         id: lark-auth
@@ -125,8 +103,6 @@ jobs:
               --data "$AUTH_PAYLOAD"
           )"
 
-          echo "Lark auth response received"
-
           AUTH_CODE="$(
             echo "$AUTH_RESPONSE" |
             jq -r '.code // -1'
@@ -151,128 +127,11 @@ jobs:
           fi
 
           echo "::add-mask::$TENANT_ACCESS_TOKEN"
-
           echo "tenant_access_token=$TENANT_ACCESS_TOKEN" >> "$GITHUB_OUTPUT"
 
           echo "Lark authentication successful"
 
-
-      # ============================================================
-      # 5. BUILD LARK CARD
-      # ============================================================
-
-      - name: Build Lark candidate card
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SUBMISSION_ID="$(
-            jq -r '.submission_id // ""' candidate-payload.json
-          )"
-
-          CANDIDATE_NAME="$(
-            jq -r '.candidate.name // "Not provided"' candidate-payload.json
-          )"
-
-          CANDIDATE_EMAIL="$(
-            jq -r '.candidate.email // "Not provided"' candidate-payload.json
-          )"
-
-          CV_URL="$(
-            jq -r '.candidate.cv_url // ""' candidate-payload.json
-          )"
-
-          ANSWER_TESTING_URL="$(
-            jq -r '.candidate.answer_testing_url // ""' candidate-payload.json
-          )"
-
-          SUBMITTED_AT="$(
-            jq -r '.candidate.submitted_at // "Not provided"' candidate-payload.json
-          )"
-
-          DETAILS_MARKDOWN="$(
-            printf '**Candidate:** %s\n**Email:** %s\n**Submitted at:** %s\n**Submission ID:** %s' \
-              "$CANDIDATE_NAME" \
-              "$CANDIDATE_EMAIL" \
-              "$SUBMITTED_AT" \
-              "$SUBMISSION_ID"
-          )"
-
-          MATERIALS_MARKDOWN="$(
-            if [ -n "$CV_URL" ]; then
-              printf '[Open CV](%s)\n\n[Open Answer Testing](%s)' \
-                "$CV_URL" \
-                "$ANSWER_TESTING_URL"
-            else
-              printf '[Open Answer Testing](%s)' \
-                "$ANSWER_TESTING_URL"
-            fi
-          )"
-
-          jq -n \
-            --arg details "$DETAILS_MARKDOWN" \
-            --arg materials "$MATERIALS_MARKDOWN" \
-            '{
-              config: {
-                wide_screen_mode: true
-              },
-
-              header: {
-                template: "blue",
-
-                title: {
-                  tag: "plain_text",
-                  content: "New Candidate Submission"
-                }
-              },
-
-              elements: [
-                {
-                  tag: "div",
-
-                  text: {
-                    tag: "lark_md",
-                    content: $details
-                  }
-                },
-
-                {
-                  tag: "hr"
-                },
-
-                {
-                  tag: "div",
-
-                  text: {
-                    tag: "lark_md",
-                    content: "**Candidate Materials**"
-                  }
-                },
-
-                {
-                  tag: "div",
-
-                  text: {
-                    tag: "lark_md",
-                    content: $materials
-                  }
-                }
-              ]
-            }' > lark-card.json
-
-          jq empty lark-card.json
-
-          echo "Lark card generated successfully"
-
-          echo "Generated card:"
-          jq . lark-card.json
-
-
-      # ============================================================
-      # 6. SEND DIRECT LARK CARD
-      # ============================================================
-
-      - name: Send direct Lark card
+      - name: Test direct Lark text message
         shell: bash
         env:
           TENANT_ACCESS_TOKEN: ${{ steps.lark-auth.outputs.tenant_access_token }}
@@ -282,26 +141,29 @@ jobs:
 
           test -n "$TENANT_ACCESS_TOKEN"
           test -n "$LARK_RECIPIENT_OPEN_ID"
-          test -s lark-card.json
 
-          CARD_CONTENT="$(
-            jq -c '.' lark-card.json
+          CONTENT_JSON="$(
+            jq -n \
+              --arg text "GitHub Actions Lark test" \
+              '{
+                text: $text
+              }'
           )"
 
           MESSAGE_PAYLOAD="$(
             jq -n \
               --arg receive_id "$LARK_RECIPIENT_OPEN_ID" \
-              --arg content "$CARD_CONTENT" \
+              --arg content "$CONTENT_JSON" \
               '{
                 receive_id: $receive_id,
-                msg_type: "interactive",
+                msg_type: "text",
                 content: $content
               }'
           )"
 
-          echo "Sending Lark card..."
+          echo "Sending direct Lark text message..."
           echo "Receive ID type: open_id"
-          echo "Message type: interactive"
+          echo "Message type: text"
 
           HTTP_STATUS="$(
             curl \
@@ -349,25 +211,21 @@ jobs:
 
           if [ "$LARK_CODE" != "0" ]; then
             echo "::error::Lark rejected the message"
-            echo "Lark code: $LARK_CODE"
-            echo "Lark message: $LARK_MESSAGE"
+            echo "Code: $LARK_CODE"
+            echo "Message: $LARK_MESSAGE"
             exit 1
           fi
 
-          echo "Lark card sent successfully"
+          echo "Lark text message sent successfully"
           echo "Message ID: $MESSAGE_ID"
 
-
-      # ============================================================
-      # 7. UPLOAD GENERATED LARK CARD
-      # ============================================================
-
-      - name: Upload Lark card artifact
+      - name: Upload Lark response artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: lark-card-${{ github.event.client_payload.submission_id }}
+          name: lark-debug-${{ github.event.client_payload.submission_id }}
           path: |
-            lark-card.json
+            candidate-payload.json
             lark-response.json
           retention-days: 7
-          if-no-files-found: error
+          if-no-files-found: ignore
