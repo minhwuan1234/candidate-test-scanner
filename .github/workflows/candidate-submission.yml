@@ -24,7 +24,7 @@ jobs:
           SUBMISSION_ID: ${{ github.event.client_payload.submission_id }}
           CANDIDATE_NAME: ${{ github.event.client_payload.candidate.name }}
           CANDIDATE_EMAIL: ${{ github.event.client_payload.candidate.email }}
-          POSITION: ${{ github.event.client_payload.candidate.position }}
+          CV_URL: ${{ github.event.client_payload.candidate.cv_url }}
           ANSWER_TESTING_URL: ${{ github.event.client_payload.candidate.answer_testing_url }}
         run: |
           set -euo pipefail
@@ -32,14 +32,20 @@ jobs:
           test -n "$SUBMISSION_ID"
           test -n "$CANDIDATE_NAME"
           test -n "$CANDIDATE_EMAIL"
-          test -n "$POSITION"
           test -n "$ANSWER_TESTING_URL"
 
           echo "Candidate submission event accepted"
           echo "Submission ID: $SUBMISSION_ID"
           echo "Candidate: $CANDIDATE_NAME"
           echo "Email: $CANDIDATE_EMAIL"
-          echo "Position: $POSITION"
+
+          if [ -n "$CV_URL" ]; then
+            echo "CV URL provided"
+          else
+            echo "CV URL not provided"
+          fi
+
+          echo "Answer testing URL provided"
 
       - name: Store candidate payload
         shell: bash
@@ -118,7 +124,6 @@ jobs:
           fi
 
           echo "::add-mask::$TENANT_ACCESS_TOKEN"
-
           echo "tenant_access_token=$TENANT_ACCESS_TOKEN" >> "$GITHUB_OUTPUT"
 
           echo "Lark authentication successful"
@@ -140,14 +145,6 @@ jobs:
             jq -r '.candidate.email // "Not provided"' candidate-payload.json
           )"
 
-          POSITION="$(
-            jq -r '.candidate.position // "Not provided"' candidate-payload.json
-          )"
-
-          JOB_SLUG="$(
-            jq -r '.candidate.job_slug // ""' candidate-payload.json
-          )"
-
           CV_URL="$(
             jq -r '.candidate.cv_url // ""' candidate-payload.json
           )"
@@ -156,19 +153,14 @@ jobs:
             jq -r '.candidate.answer_testing_url // ""' candidate-payload.json
           )"
 
-          SOURCE_URL="$(
-            jq -r '.candidate.source_url // ""' candidate-payload.json
-          )"
-
           SUBMITTED_AT="$(
             jq -r '.candidate.submitted_at // "Not provided"' candidate-payload.json
           )"
 
           DETAILS_MARKDOWN="$(
-            printf '**Candidate:** %s\n**Email:** %s\n**Position:** %s\n**Submitted at:** %s\n**Submission ID:** %s' \
+            printf '**Candidate:** %s\n**Email:** %s\n**Submitted at:** %s\n**Submission ID:** %s' \
               "$CANDIDATE_NAME" \
               "$CANDIDATE_EMAIL" \
-              "$POSITION" \
               "$SUBMITTED_AT" \
               "$SUBMISSION_ID"
           )"
@@ -177,7 +169,6 @@ jobs:
             --arg details "$DETAILS_MARKDOWN" \
             --arg cv_url "$CV_URL" \
             --arg answer_testing_url "$ANSWER_TESTING_URL" \
-            --arg source_url "$SOURCE_URL" \
             '
             {
               config: {
@@ -257,25 +248,6 @@ jobs:
                               },
                               type: "primary",
                               url: $answer_testing_url
-                            }
-                          ]
-                        else
-                          []
-                        end
-                      )
-
-                      +
-
-                      (
-                        if $source_url != "" then
-                          [
-                            {
-                              tag: "button",
-                              text: {
-                                tag: "plain_text",
-                                content: "Source Page"
-                              },
-                              url: $source_url
                             }
                           ]
                         else
