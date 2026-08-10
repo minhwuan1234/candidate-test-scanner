@@ -131,20 +131,38 @@ jobs:
 
           echo "Lark authentication successful"
 
-      - name: Test direct Lark text message
+      - name: Send candidate data to Lark
         shell: bash
         env:
           TENANT_ACCESS_TOKEN: ${{ steps.lark-auth.outputs.tenant_access_token }}
           LARK_RECIPIENT_OPEN_ID: ${{ secrets.LARK_RECIPIENT_OPEN_ID }}
+
+          SUBMISSION_ID: ${{ github.event.client_payload.submission_id }}
+          CANDIDATE_NAME: ${{ github.event.client_payload.candidate.name }}
+          CANDIDATE_EMAIL: ${{ github.event.client_payload.candidate.email }}
+          CV_URL: ${{ github.event.client_payload.candidate.cv_url }}
+          ANSWER_TESTING_URL: ${{ github.event.client_payload.candidate.answer_testing_url }}
+          SUBMITTED_AT: ${{ github.event.client_payload.candidate.submitted_at }}
+
         run: |
           set -euo pipefail
 
           test -n "$TENANT_ACCESS_TOKEN"
           test -n "$LARK_RECIPIENT_OPEN_ID"
 
+          MESSAGE_TEXT="$(
+            printf 'New Candidate Submission\n\nName: %s\nEmail: %s\nSubmitted at: %s\nSubmission ID: %s\n\nCV:\n%s\n\nAnswer Testing:\n%s' \
+              "$CANDIDATE_NAME" \
+              "$CANDIDATE_EMAIL" \
+              "${SUBMITTED_AT:-Not provided}" \
+              "$SUBMISSION_ID" \
+              "${CV_URL:-Not provided}" \
+              "$ANSWER_TESTING_URL"
+          )"
+
           CONTENT_JSON="$(
             jq -n \
-              --arg text "GitHub Actions Lark test" \
+              --arg text "$MESSAGE_TEXT" \
               '{
                 text: $text
               }'
@@ -161,7 +179,7 @@ jobs:
               }'
           )"
 
-          echo "Sending direct Lark text message..."
+          echo "Sending candidate data to Lark..."
           echo "Receive ID type: open_id"
           echo "Message type: text"
 
@@ -194,7 +212,7 @@ jobs:
           )"
 
           LARK_MESSAGE="$(
-            jq -r '.msg // "Unknown Lark message error"' lark-response.json
+            jq -r '.msg // "Unknown Lark error"' lark-response.json
           )"
 
           MESSAGE_ID="$(
@@ -216,7 +234,7 @@ jobs:
             exit 1
           fi
 
-          echo "Lark text message sent successfully"
+          echo "Candidate data sent to Lark successfully"
           echo "Message ID: $MESSAGE_ID"
 
       - name: Upload Lark response artifact
