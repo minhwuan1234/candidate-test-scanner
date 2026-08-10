@@ -18,6 +18,10 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      # ============================================================
+      # 1. VALIDATE PAYLOAD FROM SUPABASE
+      # ============================================================
+
       - name: Validate dispatch payload
         shell: bash
         env:
@@ -26,6 +30,7 @@ jobs:
           CANDIDATE_EMAIL: ${{ github.event.client_payload.candidate.email }}
           CV_URL: ${{ github.event.client_payload.candidate.cv_url }}
           ANSWER_TESTING_URL: ${{ github.event.client_payload.candidate.answer_testing_url }}
+          SUBMITTED_AT: ${{ github.event.client_payload.candidate.submitted_at }}
         run: |
           set -euo pipefail
 
@@ -46,6 +51,12 @@ jobs:
           fi
 
           echo "Answer testing URL provided"
+          echo "Submitted at: ${SUBMITTED_AT:-Not provided}"
+
+
+      # ============================================================
+      # 2. STORE RAW PAYLOAD
+      # ============================================================
 
       - name: Store candidate payload
         shell: bash
@@ -61,6 +72,14 @@ jobs:
 
           echo "Candidate payload stored successfully"
 
+          echo "Payload received:"
+          jq . candidate-payload.json
+
+
+      # ============================================================
+      # 3. UPLOAD RAW PAYLOAD ARTIFACT
+      # ============================================================
+
       - name: Upload candidate payload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -68,6 +87,11 @@ jobs:
           path: candidate-payload.json
           retention-days: 7
           if-no-files-found: error
+
+
+      # ============================================================
+      # 4. GET LARK TENANT ACCESS TOKEN
+      # ============================================================
 
       - name: Get Lark tenant access token
         id: lark-auth
@@ -95,12 +119,13 @@ jobs:
             curl \
               --silent \
               --show-error \
-              --fail-with-body \
               --request POST \
               --url "https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal" \
               --header "Content-Type: application/json; charset=utf-8" \
               --data "$AUTH_PAYLOAD"
           )"
+
+          echo "Lark auth response received"
 
           AUTH_CODE="$(
             echo "$AUTH_RESPONSE" |
@@ -118,15 +143,23 @@ jobs:
           )"
 
           if [ "$AUTH_CODE" != "0" ] || [ -z "$TENANT_ACCESS_TOKEN" ]; then
-            echo "::error::Lark authentication failed: code=$AUTH_CODE, message=$AUTH_MESSAGE"
+            echo "::error::Lark authentication failed"
+            echo "Code: $AUTH_CODE"
+            echo "Message: $AUTH_MESSAGE"
             echo "$AUTH_RESPONSE" | jq .
             exit 1
           fi
 
           echo "::add-mask::$TENANT_ACCESS_TOKEN"
+
           echo "tenant_access_token=$TENANT_ACCESS_TOKEN" >> "$GITHUB_OUTPUT"
 
           echo "Lark authentication successful"
+
+
+      # ============================================================
+      # 5. BUILD LARK CARD
+      # ============================================================
 
       - name: Build Lark candidate card
         shell: bash
@@ -165,105 +198,79 @@ jobs:
               "$SUBMISSION_ID"
           )"
 
+          MATERIALS_MARKDOWN="$(
+            if [ -n "$CV_URL" ]; then
+              printf '[Open CV](%s)\n\n[Open Answer Testing](%s)' \
+                "$CV_URL" \
+                "$ANSWER_TESTING_URL"
+            else
+              printf '[Open Answer Testing](%s)' \
+                "$ANSWER_TESTING_URL"
+            fi
+          )"
+
           jq -n \
             --arg details "$DETAILS_MARKDOWN" \
-            --arg cv_url "$CV_URL" \
-            --arg answer_testing_url "$ANSWER_TESTING_URL" \
-            '
-            {
+            --arg materials "$MATERIALS_MARKDOWN" \
+            '{
               config: {
-                wide_screen_mode: true,
-                enable_forward: true
+                wide_screen_mode: true
               },
 
               header: {
                 template: "blue",
+
                 title: {
                   tag: "plain_text",
                   content: "New Candidate Submission"
                 }
               },
 
-              elements: (
-                [
-                  {
-                    tag: "div",
-                    text: {
-                      tag: "lark_md",
-                      content: $details
-                    }
-                  },
+              elements: [
+                {
+                  tag: "div",
 
-                  {
-                    tag: "hr"
-                  },
-
-                  {
-                    tag: "div",
-                    text: {
-                      tag: "lark_md",
-                      content: "**Candidate Materials**"
-                    }
+                  text: {
+                    tag: "lark_md",
+                    content: $details
                   }
-                ]
+                },
 
-                +
+                {
+                  tag: "hr"
+                },
 
-                [
-                  {
-                    tag: "action",
-                    actions: (
-                      []
+                {
+                  tag: "div",
 
-                      +
-
-                      (
-                        if $cv_url != "" then
-                          [
-                            {
-                              tag: "button",
-                              text: {
-                                tag: "plain_text",
-                                content: "Open CV"
-                              },
-                              type: "primary",
-                              url: $cv_url
-                            }
-                          ]
-                        else
-                          []
-                        end
-                      )
-
-                      +
-
-                      (
-                        if $answer_testing_url != "" then
-                          [
-                            {
-                              tag: "button",
-                              text: {
-                                tag: "plain_text",
-                                content: "Open Answer"
-                              },
-                              type: "primary",
-                              url: $answer_testing_url
-                            }
-                          ]
-                        else
-                          []
-                        end
-                      )
-                    )
+                  text: {
+                    tag: "lark_md",
+                    content: "**Candidate Materials**"
                   }
-                ]
-              )
-            }
-            ' > lark-card.json
+                },
+
+                {
+                  tag: "div",
+
+                  text: {
+                    tag: "lark_md",
+                    content: $materials
+                  }
+                }
+              ]
+            }' > lark-card.json
 
           jq empty lark-card.json
 
           echo "Lark card generated successfully"
+
+          echo "Generated card:"
+          jq . lark-card.json
+
+
+      # ============================================================
+      # 6. SEND DIRECT LARK CARD
+      # ============================================================
 
       - name: Send direct Lark card
         shell: bash
@@ -292,11 +299,16 @@ jobs:
               }'
           )"
 
-          LARK_RESPONSE="$(
+          echo "Sending Lark card..."
+          echo "Receive ID type: open_id"
+          echo "Message type: interactive"
+
+          HTTP_STATUS="$(
             curl \
               --silent \
               --show-error \
-              --fail-with-body \
+              --output lark-response.json \
+              --write-out "%{http_code}" \
               --request POST \
               --url "https://open.larksuite.com/open-apis/im/v1/messages?receive_id_type=open_id" \
               --header "Authorization: Bearer $TENANT_ACCESS_TOKEN" \
@@ -304,34 +316,58 @@ jobs:
               --data "$MESSAGE_PAYLOAD"
           )"
 
+          echo "Lark HTTP status: $HTTP_STATUS"
+
+          if [ ! -s lark-response.json ]; then
+            echo "::error::Lark returned an empty response"
+            exit 1
+          fi
+
+          echo "Lark response:"
+          cat lark-response.json
+          echo ""
+
           LARK_CODE="$(
-            echo "$LARK_RESPONSE" |
-            jq -r '.code // -1'
+            jq -r '.code // -1' lark-response.json
           )"
 
           LARK_MESSAGE="$(
-            echo "$LARK_RESPONSE" |
-            jq -r '.msg // "Unknown Lark message error"'
+            jq -r '.msg // "Unknown Lark message error"' lark-response.json
           )"
 
           MESSAGE_ID="$(
-            echo "$LARK_RESPONSE" |
-            jq -r '.data.message_id // empty'
+            jq -r '.data.message_id // empty' lark-response.json
           )"
 
+          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+            echo "::error::Lark HTTP request failed"
+            echo "HTTP status: $HTTP_STATUS"
+            echo "Lark code: $LARK_CODE"
+            echo "Lark message: $LARK_MESSAGE"
+            exit 1
+          fi
+
           if [ "$LARK_CODE" != "0" ]; then
-            echo "::error::Failed to send Lark card: code=$LARK_CODE, message=$LARK_MESSAGE"
-            echo "$LARK_RESPONSE" | jq .
+            echo "::error::Lark rejected the message"
+            echo "Lark code: $LARK_CODE"
+            echo "Lark message: $LARK_MESSAGE"
             exit 1
           fi
 
           echo "Lark card sent successfully"
           echo "Message ID: $MESSAGE_ID"
 
+
+      # ============================================================
+      # 7. UPLOAD GENERATED LARK CARD
+      # ============================================================
+
       - name: Upload Lark card artifact
         uses: actions/upload-artifact@v4
         with:
           name: lark-card-${{ github.event.client_payload.submission_id }}
-          path: lark-card.json
+          path: |
+            lark-card.json
+            lark-response.json
           retention-days: 7
           if-no-files-found: error
