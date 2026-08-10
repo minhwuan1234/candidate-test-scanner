@@ -47,7 +47,6 @@ jobs:
           fi
 
           echo "Answer testing URL provided"
-          echo "Submitted at: ${SUBMITTED_AT:-Not provided}"
 
       - name: Store candidate payload
         shell: bash
@@ -62,14 +61,6 @@ jobs:
           jq empty candidate-payload.json
 
           echo "Candidate payload stored successfully"
-
-      - name: Upload candidate payload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: candidate-${{ github.event.client_payload.submission_id }}
-          path: candidate-payload.json
-          retention-days: 7
-          if-no-files-found: error
 
       - name: Get Lark tenant access token
         id: lark-auth
@@ -103,20 +94,9 @@ jobs:
               --data "$AUTH_PAYLOAD"
           )"
 
-          AUTH_CODE="$(
-            echo "$AUTH_RESPONSE" |
-            jq -r '.code // -1'
-          )"
-
-          AUTH_MESSAGE="$(
-            echo "$AUTH_RESPONSE" |
-            jq -r '.msg // "Unknown Lark auth error"'
-          )"
-
-          TENANT_ACCESS_TOKEN="$(
-            echo "$AUTH_RESPONSE" |
-            jq -r '.tenant_access_token // empty'
-          )"
+          AUTH_CODE="$(echo "$AUTH_RESPONSE" | jq -r '.code // -1')"
+          AUTH_MESSAGE="$(echo "$AUTH_RESPONSE" | jq -r '.msg // "Unknown Lark auth error"')"
+          TENANT_ACCESS_TOKEN="$(echo "$AUTH_RESPONSE" | jq -r '.tenant_access_token // empty')"
 
           if [ "$AUTH_CODE" != "0" ] || [ -z "$TENANT_ACCESS_TOKEN" ]; then
             echo "::error::Lark authentication failed"
@@ -131,57 +111,180 @@ jobs:
 
           echo "Lark authentication successful"
 
-      - name: Send candidate data to Lark
+      - name: Build Lark candidate card
         shell: bash
         env:
-          TENANT_ACCESS_TOKEN: ${{ steps.lark-auth.outputs.tenant_access_token }}
-          LARK_RECIPIENT_OPEN_ID: ${{ secrets.LARK_RECIPIENT_OPEN_ID }}
-
           SUBMISSION_ID: ${{ github.event.client_payload.submission_id }}
           CANDIDATE_NAME: ${{ github.event.client_payload.candidate.name }}
           CANDIDATE_EMAIL: ${{ github.event.client_payload.candidate.email }}
           CV_URL: ${{ github.event.client_payload.candidate.cv_url }}
           ANSWER_TESTING_URL: ${{ github.event.client_payload.candidate.answer_testing_url }}
           SUBMITTED_AT: ${{ github.event.client_payload.candidate.submitted_at }}
+        run: |
+          set -euo pipefail
 
+          DETAILS="$(
+            printf '**Name**\n%s\n\n**Email**\n%s\n\n**Submitted at**\n%s\n\n**Submission ID**\n%s' \
+              "$CANDIDATE_NAME" \
+              "$CANDIDATE_EMAIL" \
+              "${SUBMITTED_AT:-Not provided}" \
+              "$SUBMISSION_ID"
+          )"
+
+          if [ -n "$CV_URL" ]; then
+            jq -n \
+              --arg details "$DETAILS" \
+              --arg cv_url "$CV_URL" \
+              --arg answer_url "$ANSWER_TESTING_URL" \
+              '{
+                config: {
+                  wide_screen_mode: true
+                },
+
+                header: {
+                  template: "blue",
+                  title: {
+                    tag: "plain_text",
+                    content: "New Candidate Submission"
+                  }
+                },
+
+                elements: [
+                  {
+                    tag: "div",
+                    text: {
+                      tag: "lark_md",
+                      content: $details
+                    }
+                  },
+
+                  {
+                    tag: "hr"
+                  },
+
+                  {
+                    tag: "div",
+                    text: {
+                      tag: "lark_md",
+                      content: "**Candidate Materials**"
+                    }
+                  },
+
+                  {
+                    tag: "action",
+                    actions: [
+                      {
+                        tag: "button",
+                        text: {
+                          tag: "plain_text",
+                          content: "Open CV"
+                        },
+                        type: "default",
+                        url: $cv_url
+                      },
+
+                      {
+                        tag: "button",
+                        text: {
+                          tag: "plain_text",
+                          content: "Open Answer"
+                        },
+                        type: "primary",
+                        url: $answer_url
+                      }
+                    ]
+                  }
+                ]
+              }' > lark-card.json
+
+          else
+
+            jq -n \
+              --arg details "$DETAILS" \
+              --arg answer_url "$ANSWER_TESTING_URL" \
+              '{
+                config: {
+                  wide_screen_mode: true
+                },
+
+                header: {
+                  template: "blue",
+                  title: {
+                    tag: "plain_text",
+                    content: "New Candidate Submission"
+                  }
+                },
+
+                elements: [
+                  {
+                    tag: "div",
+                    text: {
+                      tag: "lark_md",
+                      content: $details
+                    }
+                  },
+
+                  {
+                    tag: "hr"
+                  },
+
+                  {
+                    tag: "div",
+                    text: {
+                      tag: "lark_md",
+                      content: "**Candidate Materials**"
+                    }
+                  },
+
+                  {
+                    tag: "action",
+                    actions: [
+                      {
+                        tag: "button",
+                        text: {
+                          tag: "plain_text",
+                          content: "Open Answer"
+                        },
+                        type: "primary",
+                        url: $answer_url
+                      }
+                    ]
+                  }
+                ]
+              }' > lark-card.json
+
+          fi
+
+          jq empty lark-card.json
+
+          echo "Lark card generated successfully"
+
+      - name: Send candidate card to Lark
+        shell: bash
+        env:
+          TENANT_ACCESS_TOKEN: ${{ steps.lark-auth.outputs.tenant_access_token }}
+          LARK_RECIPIENT_OPEN_ID: ${{ secrets.LARK_RECIPIENT_OPEN_ID }}
         run: |
           set -euo pipefail
 
           test -n "$TENANT_ACCESS_TOKEN"
           test -n "$LARK_RECIPIENT_OPEN_ID"
+          test -s lark-card.json
 
-          MESSAGE_TEXT="$(
-            printf 'New Candidate Submission\n\nName: %s\nEmail: %s\nSubmitted at: %s\nSubmission ID: %s\n\nCV:\n%s\n\nAnswer Testing:\n%s' \
-              "$CANDIDATE_NAME" \
-              "$CANDIDATE_EMAIL" \
-              "${SUBMITTED_AT:-Not provided}" \
-              "$SUBMISSION_ID" \
-              "${CV_URL:-Not provided}" \
-              "$ANSWER_TESTING_URL"
-          )"
-
-          CONTENT_JSON="$(
-            jq -n \
-              --arg text "$MESSAGE_TEXT" \
-              '{
-                text: $text
-              }'
+          CARD_CONTENT="$(
+            jq -c '.' lark-card.json
           )"
 
           MESSAGE_PAYLOAD="$(
             jq -n \
               --arg receive_id "$LARK_RECIPIENT_OPEN_ID" \
-              --arg content "$CONTENT_JSON" \
+              --arg content "$CARD_CONTENT" \
               '{
                 receive_id: $receive_id,
-                msg_type: "text",
+                msg_type: "interactive",
                 content: $content
               }'
           )"
-
-          echo "Sending candidate data to Lark..."
-          echo "Receive ID type: open_id"
-          echo "Message type: text"
 
           HTTP_STATUS="$(
             curl \
@@ -207,17 +310,9 @@ jobs:
           cat lark-response.json
           echo ""
 
-          LARK_CODE="$(
-            jq -r '.code // -1' lark-response.json
-          )"
-
-          LARK_MESSAGE="$(
-            jq -r '.msg // "Unknown Lark error"' lark-response.json
-          )"
-
-          MESSAGE_ID="$(
-            jq -r '.data.message_id // empty' lark-response.json
-          )"
+          LARK_CODE="$(jq -r '.code // -1' lark-response.json)"
+          LARK_MESSAGE="$(jq -r '.msg // "Unknown Lark error"' lark-response.json)"
+          MESSAGE_ID="$(jq -r '.data.message_id // empty' lark-response.json)"
 
           if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
             echo "::error::Lark HTTP request failed"
@@ -228,22 +323,23 @@ jobs:
           fi
 
           if [ "$LARK_CODE" != "0" ]; then
-            echo "::error::Lark rejected the message"
+            echo "::error::Lark rejected the card"
             echo "Code: $LARK_CODE"
             echo "Message: $LARK_MESSAGE"
             exit 1
           fi
 
-          echo "Candidate data sent to Lark successfully"
+          echo "Candidate card sent to Lark successfully"
           echo "Message ID: $MESSAGE_ID"
 
-      - name: Upload Lark response artifact
+      - name: Upload debug artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: lark-debug-${{ github.event.client_payload.submission_id }}
           path: |
             candidate-payload.json
+            lark-card.json
             lark-response.json
           retention-days: 7
           if-no-files-found: ignore
