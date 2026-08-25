@@ -159,6 +159,9 @@ jobs:
           CV_URL: ${{ github.event.client_payload.candidate.cv_url }}
           ANSWER_TESTING_URL: ${{ github.event.client_payload.candidate.answer_testing_url }}
           SUBMITTED_AT: ${{ github.event.client_payload.candidate.submitted_at }}
+
+          SETUP_CALL_URL: "https://cal.com/f-creative-krcb9e/30min"
+
         run: |
           set -euo pipefail
 
@@ -176,6 +179,7 @@ jobs:
               --arg details "$DETAILS" \
               --arg cv_url "$CV_URL" \
               --arg answer_url "$ANSWER_TESTING_URL" \
+              --arg setup_call_url "$SETUP_CALL_URL" \
               '{
                 config: {
                   wide_screen_mode: true
@@ -231,6 +235,16 @@ jobs:
                         },
                         type: "primary",
                         url: $answer_url
+                      },
+
+                      {
+                        tag: "button",
+                        text: {
+                          tag: "plain_text",
+                          content: "📅 Setup lịch Call"
+                        },
+                        type: "default",
+                        url: $setup_call_url
                       }
                     ]
                   }
@@ -242,6 +256,7 @@ jobs:
             jq -n \
               --arg details "$DETAILS" \
               --arg answer_url "$ANSWER_TESTING_URL" \
+              --arg setup_call_url "$SETUP_CALL_URL" \
               '{
                 config: {
                   wide_screen_mode: true
@@ -287,6 +302,16 @@ jobs:
                         },
                         type: "primary",
                         url: $answer_url
+                      },
+
+                      {
+                        tag: "button",
+                        text: {
+                          tag: "plain_text",
+                          content: "📅 Setup lịch Call"
+                        },
+                        type: "default",
+                        url: $setup_call_url
                       }
                     ]
                   }
