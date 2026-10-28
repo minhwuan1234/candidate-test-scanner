@@ -345,6 +345,8 @@ jobs:
           )"
 
           IFS=',' read -ra RAW_RECIPIENTS <<< "$LARK_RECIPIENT_OPEN_ID"
+          # Phương Anh receives candidate cards alongside the configured recipients.
+          RAW_RECIPIENTS+=('ou_f09209f771cd71c69a4c3163dc590f40')
 
           declare -A SEEN_RECIPIENTS
           RECIPIENTS=()
